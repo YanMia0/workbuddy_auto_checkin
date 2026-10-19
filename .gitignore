@@ -1,3 +1,5 @@
+name: wb_multi.py
+
 __pycache__/
 *.pyc
 .tmp_token
@@ -9,3 +11,8 @@ token*.jpg
 build/
 dist/
 *.spec
+
+# 多账号运行数据（含凭证，禁止入库）
+accounts.json
+ledger/
+logs/
