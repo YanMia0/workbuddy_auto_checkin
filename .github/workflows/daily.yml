@@ -1,17 +1,13 @@
-name: Buddy 加油站每日自动化
+name: Buddy 加油站每日自动化（多账号）
 
 on:
   schedule:
     # GitHub 的 cron 是尽力而为：高负载时会延迟，甚至静默丢弃整次运行。
     # 因此设三个时段互为备份 —— 只要有一个跑到，当天就完成了。
-    # 脚本是幂等的：已签过只会返回「今日已签过」，名额用完不会重派，
-    # 所以多触发不会重复领取。
+    # 脚本幂等：已签过只返回「今日已签过」，名额用完不重派，多触发不会重复领取。
     #
-    # 间隔取 6 小时，是因为猫猫旅行时长最长 4 小时（travel/config 的
-    # duration_hours_max），这样下一轮运行时它必定已经到家，可以领回礼物。
-    # 三个点都落在 :10，避开 GitHub 文档提示的整点高负载期。
-    #
-    # 注意 cron 按 UTC 计时，下面是 UTC，括号内为北京时间（UTC+8）。
+    # 猫猫旅行时长最长 4 小时，间隔 6 小时保证下一轮必定已到家、可领回礼物。
+    # 三个点都落在 :10，避开整点高负载期。cron 按 UTC 计时（括号内为北京时间）。
     - cron: "10 0 * * *"    # 00:10 UTC = 08:10 北京（主时段）
     - cron: "10 6 * * *"    # 06:10 UTC = 14:10 北京（备份）
     - cron: "10 12 * * *"   # 12:10 UTC = 20:10 北京（备份）
@@ -32,49 +28,41 @@ jobs:
       - name: 检出仓库
         uses: actions/checkout@v4
 
-      - name: 定位 Python 解释器
-        id: py
-        # 解释器路径不写死版本号，动态取 runner 上可用的解释器
+      - name: 执行多账号签到与派猫猫
+        id: run
+        env:
+          # 多账号凭证：JSON 数组 [{"alias":"主号","token":"..."}, ...]
+          # 在仓库 Settings → Secrets and variables → Actions 里新建 Secret：
+          #   Name: WB_ACCOUNTS_JSON
+          WB_ACCOUNTS_JSON: ${{ secrets.WB_ACCOUNTS_JSON }}
+          WB_ENDPOINT: https://copilot.tencent.com
+          WB_RESULT_FILE: ${{ runner.temp }}/wb_result.md
         run: |
-          set -euo pipefail
+          set -uo pipefail
           PY="$(command -v python3 || command -v python || true)"
           if [ -z "$PY" ]; then
             echo "未找到可用的 Python 解释器" >&2
             exit 1
           fi
-          "$PY" -c 'import sys; print("使用解释器:", sys.executable, sys.version.split()[0])'
-          echo "python_path=$PY" >> "$GITHUB_OUTPUT"
-
-      - name: 执行签到与派猫猫
-        id: run
-        env:
-          WB_ACCESS_TOKEN: ${{ secrets.WB_ACCESS_TOKEN }}
-          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
-          WB_ENDPOINT: https://copilot.tencent.com
-          WB_RESULT_FILE: ${{ runner.temp }}/wb_result.json
-        run: |
-          set -uo pipefail
-          PY="${{ steps.py.outputs.python_path }}"
           set +e
-          "$PY" wb_auto.py
+          "$PY" wb_multi.py
           code=$?
           set -e
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
-          # 签到成功即成功：脚本自身已把猫猫失败与签到结论解耦，
-          # 这里统一以 0 退出，仅用 warning 提示存在未完成项。
+          # 单账号失败不阻断整体；以 0 退出，仅用 warning 提示未完成项
           if [ "$code" -ne 0 ]; then
-            echo "::warning::本轮存在未完成项，详见上方日志与飞书卡片"
+            echo "::warning::本轮存在未完成项，详见上方日志与 step summary"
           fi
           exit 0
 
       - name: 汇总
         if: always()
         env:
-          RESULT_FILE: ${{ runner.temp }}/wb_result.json
+          RESULT_FILE: ${{ runner.temp }}/wb_result.md
         run: |
           set -uo pipefail
           {
-            echo "### Buddy 加油站每日自动化"
+            echo "### Buddy 加油站 · 多账号每日自动化"
             echo ""
             echo "- 运行时间：$(date -u '+%Y-%m-%d %H:%M:%S UTC')（cron 为 UTC）"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -84,3 +72,11 @@ jobs:
           else
             echo "- 未产出结论文案，请查看上方日志" >> "$GITHUB_STEP_SUMMARY"
           fi
+
+      - name: 上传积分台账
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: points-ledger-${{ github.run_id }}
+          path: ledger/
+          retention-days: 90
